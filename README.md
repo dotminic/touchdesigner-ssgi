@@ -2,7 +2,8 @@
 
 ### Screen Space Global Illumination for TouchDesigner
 GLSL implementation of screen space global illumination as a GLSL TOP for TouchDesigner.
-The shader basically samples a grid of points that it treats as light sources. The colours for the light sources are based on the colour buffer at the light locations. Each light is then averaged out and blended with the current pixel value thus faking some sort of global illumination. 
+The shader basically samples a grid of points that it treats as light sources. The colours for the light sources are based on the colour buffer at the light locations. Each light is then averaged out and blended with the current pixel value thus faking some sort of global illumination.
+You can check out a (very simple) online demo [here](http://petitsapin.com/projects/webgl/ssgi/)
 
 ### Usage
 Just drop down a GLSL TOP and copy/paste the shader. The shader requires 4 parameters
