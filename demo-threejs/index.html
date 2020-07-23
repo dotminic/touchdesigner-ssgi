@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>SSGI</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<style>
+			body {
+				margin: 0;
+				padding: 0;
+				background-color: #aaa;
+				overflow: hidden;
+				width: 100%;
+				height: 100%;
+			}
+		</style>
+	</head>
+	<script src="./libs/three.min.js"></script>
+	<script src="./libs/stats.min.js"></script>
+	<script src="./libs/dat.gui.min.js"></script>
+	<script src="./libs/OrbitControls.js"></script>
+	<body>
+		<script id="quadVS" type="x-shader/x-vertex">
+			varying vec2 vUv;
+
+			void main()
+			{
+				vUv = uv;
+				gl_Position = vec4(position.x, position.y, 0.0, 1.0);
+			}
+		</script>
+
+		<script type="module">
+			let controls;
+			let container;
+			let stats;
+			let camera;
+			let scene;
+			let renderer;
+			let group;
+			let width = 0;
+			let height = 0;
+			let light = null;
+			let lightAngle = 0.0;
+
+			let rt = null;
+			let rtScene = null;
+			let rtQuad = null;
+			let SSGIShader = null;
+
+			let params = {kernelSize:8, giAmount:500};
+
+			loadAssets();
+
+			function loadAssets()
+			{
+				let loader = new THREE.FileLoader();
+				loader.load("./shaders/ssgi.glsl",
+					function( data )
+					{
+						SSGIShader = data;
+						init();
+						animate();
+					},
+					function( xhr ) {},
+					function( err )
+					{
+						console.log("shader load error");
+					});
+			}
+
+			function init()
+			{
+				width = window.innerWidth;
+				height = window.innerHeight;
+
+				setUpRenderer();
+				setupScene();
+				setUpPostProcessing();
+
+				var gui = new dat.GUI({width:300});
+
+				gui.add(params, 'kernelSize', 2, 32).step(1).onChange(function( val )
+					{
+						rtQuad.material.uniforms.uKernelSize.value = val;
+					});
+				gui.add(params, 'giAmount', 0, 2000).onChange(function( val )
+					{
+						rtQuad.material.uniforms.uGIAmount.value = val;
+					});
+				gui.open();
+
+				window.addEventListener('resize', onWindowResize, false);
+			}
+
+			function setupScene()
+			{
+				light = new THREE.PointLight(0xFFFFFF);
+				light.position.set(0, 30, 0);
+				light.castShadow = true;
+				light.shadow.mapSize.width = 2048;
+				light.shadow.mapSize.height = 2048;
+				light.shadow.camera.near = camera.near;
+				light.shadow.camera.far = camera.far;
+				scene.add(light);
+
+				// scene.add(new THREE.HemisphereLight(0xffffbb, 0x080820, .4));
+
+				group = new THREE.Group();
+				scene.add(group);
+
+				let planeGeo = new THREE.PlaneBufferGeometry(1, 1, 40, 40);
+				let planeMat = new THREE.MeshLambertMaterial({color:0x33333, side:THREE.DoubleSide});
+				let planeMesh = new THREE.Mesh(planeGeo, planeMat);
+				planeMesh.scale.set(400, 400, 100);
+				planeMesh.rotation.x = Math.PI * 0.5;
+				planeMesh.receiveShadow = true;
+				// group.add(planeMesh);
+
+				let tubeGeo = new THREE.CylinderBufferGeometry(5, 5, 22, 32);
+				let tubeMat = new THREE.MeshLambertMaterial({color:0xFFFFFF});
+				let tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+				tubeMesh.castShadow = true;
+				tubeMesh.receiveShadow = true;
+				group.add(tubeMesh);
+
+				var geometry = new THREE.BoxBufferGeometry(10, 10, 10);
+
+				let boxCount = 16;
+				let angleInc = 2.0 * Math.PI / boxCount;
+				let angle = 0;
+				let radius = 16;
+
+				for (var i = 0; i < boxCount; i++)
+				{
+					var material = new THREE.MeshLambertMaterial({
+						color:new THREE.Color(Math.random() * 1, 0.5 + Math.random() * 0.5, 0.5 + Math.random() * 0.5)
+					});
+
+					var mesh = new THREE.Mesh(geometry, material);
+					mesh.position.x = Math.cos(angle) * radius;
+					mesh.position.z = Math.sin(angle) * radius;
+					mesh.rotation.y = Math.random();
+					mesh.scale.set(.3, Math.random() * 1.5 + .5, .3);
+					mesh.position.y = mesh.geometry.parameters.height * mesh.scale.y * 0.5;
+
+					mesh.receiveShadow = true;
+					mesh.castShadow = true;
+					group.add(mesh);
+					angle += angleInc;
+				}
+
+				stats = new Stats();
+				container.appendChild(stats.dom);
+			}
+
+			function setUpRenderer()
+			{
+				container = document.createElement('div');
+				document.body.appendChild(container);
+
+				renderer = new THREE.WebGLRenderer({antialias:true});
+				renderer.setSize(width, height);
+				renderer.logarithmicDepthBuffer = true;
+				renderer.shadowMap.enabled = true;
+				renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+				document.body.appendChild(renderer.domElement);
+
+				camera = new THREE.PerspectiveCamera(65, width / height, .1, 200);
+				camera.position.y = 16;
+				camera.position.z = 30;
+				camera.lookAt(new THREE.Vector3(0, 0, 0));
+
+				controls = new THREE.OrbitControls(camera, renderer.domElement);
+				controls.enableDamping = true;
+
+				scene = new THREE.Scene();
+				scene.background = new THREE.Color(0x0);
+			}
+
+			function setUpPostProcessing()
+			{
+				let dt = new THREE.DepthTexture(width, height);
+				rt = new THREE.WebGLRenderTarget(width, height,
+					{
+						minFilter:THREE.LinearFilter,
+						magFilter:THREE.LinearFilter,
+						format:THREE.RGBFormat
+					});
+				rt.texture.generateMipmaps = true;
+				rt.depthBuffer = true;
+				rt.depthTexture = dt;
+				rt.depthTexture.format = THREE.DepthFormat;
+				rt.depthTexture.type = THREE.UnsignedIntType;
+				rt.depthTexture.minFilter = THREE.NearestFilter;
+				rt.depthTexture.magFilter = THREE.NearestFilter;
+
+				rtScene = new THREE.Scene();
+
+				let quadGeom = new THREE.PlaneGeometry(2, 2, 2, 2);
+				let quadMat = new THREE.ShaderMaterial(
+				{
+					uniforms:
+					{
+						uColorBuffer:{value:rt.texture},
+						uDepthTexture:{value:rt.texture},
+						uInvProjMatrix:{value:camera.projectionMatrixInverse},
+						uGIAmount:{value:params.giAmount},
+						uKernelSize:{value:params.kernelSize},
+						uViewportSize:{value:new THREE.Vector2(width, height)},
+						cameraNear:{value: camera.near},
+						cameraFar:{value: camera.far},
+					},
+					vertexShader:document.getElementById("quadVS").textContent,
+					fragmentShader:SSGIShader,
+				});
+				rtQuad = new THREE.Mesh(quadGeom, quadMat);
+				rtScene.add(rtQuad);
+			}
+
+			function onWindowResize()
+			{
+				width = window.innerWidth;
+				height = window.innerHeight;
+
+				camera.aspect = width / height;
+				camera.updateProjectionMatrix();
+
+				var dpr = renderer.getPixelRatio();
+				rt.setSize(width * dpr, height * dpr);
+				renderer.setSize(width, height);
+
+				rtQuad.material.uniforms.uInvProjMatrix.value = camera.projectionMatrixInverse;
+			}
+
+			function animate()
+			{
+				requestAnimationFrame(animate);
+
+				stats.begin();
+				render();
+				stats.end();
+			}
+
+			function render()
+			{
+				var timer = performance.now();
+
+				light.position.x = Math.cos(lightAngle) * 10;
+				lightAngle += 0.01;
+
+				renderer.setRenderTarget(rt);
+				renderer.render(scene, camera);
+				renderer.setRenderTarget(null);
+				rtQuad.material.uniforms.uColorBuffer.value = rt.texture;
+				rtQuad.material.uniforms.uDepthTexture.value = rt.depthTexture;
+				renderer.render(rtScene, camera);
+			}
+		</script>
+	</body>
+</html>
