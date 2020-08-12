@@ -74,7 +74,7 @@ void main()
 	vec3 fragWNormal = getFragNormal(vUV.st, 0.0f);
 	vec3 gi = vec3(0);
 
-	float step = 1.0f / (float)uKernelSize;
+	float step = 1.0f / float(uKernelSize);
 	vec2 s = vec2(step * 0.5, 1.0f - step * 0.5f);
 
 	for (int i = 0; i < uKernelSize; i++)
